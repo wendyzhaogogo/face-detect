@@ -20,11 +20,10 @@ const STUDENT_PHOTOS = [
 ];
 
 // 人脸识别阈值，值越小越严格
-const FACE_MATCH_THRESHOLD = 0.6;
+const FACE_MATCH_THRESHOLD = 100;
 
 function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const videoCanvasRef = useRef<HTMLCanvasElement>(null);  // 用于显示视频
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);  // 用于显示识别信息
   const [students] = useState<Student[]>(STUDENT_PHOTOS);
   const [isLoading, setIsLoading] = useState(true);
@@ -66,7 +65,8 @@ function App() {
     for (let i = 0; i < desc1.length; i++) {
       sum += Math.pow(desc1[i] - desc2[i], 2);
     }
-    return Math.sqrt(sum);
+    // 对距离进行归一化处理
+    return Math.sqrt(sum) / desc1.length;
   };
 
   // 视频初始化
@@ -75,7 +75,6 @@ function App() {
 
     const video = videoRef.current;
     const overlayCanvas = overlayCanvasRef.current;
-    const overlayCtx = overlayCanvas.getContext("2d");
 
     // 设置画布尺寸
     overlayCanvas.width = 640;
@@ -143,18 +142,40 @@ function App() {
 
       const topLeft = face.topLeft as [number, number];
       const bottomRight = face.bottomRight as [number, number];
+      
+      // 调整框的大小和位置
       const width = bottomRight[0] - topLeft[0];
       const height = bottomRight[1] - topLeft[1];
+      
+      // 调整框的比例，使其更贴合人脸
+      const aspectRatio = 0.8; // 调整宽高比
+      const adjustedWidth = width * aspectRatio;
+      const adjustedHeight = height;
+      
+      // 计算中心点
+      const centerX = (topLeft[0] + bottomRight[0]) / 2;
+      const centerY = (topLeft[1] + bottomRight[1]) / 2;
+      
+      // 计算镜像后的中心点
+      const mirroredCenterX = overlayCanvas.width - centerX;
+      
+      // 计算新的左上角坐标
+      const mirroredTopLeft = [
+        mirroredCenterX - adjustedWidth / 2,
+        centerY - adjustedHeight / 2
+      ];
+      
+      // 添加一些padding使框更贴合
+      const padding = 3; // 减小padding
+      const finalTopLeft = [
+        mirroredTopLeft[0] - padding,
+        mirroredTopLeft[1] - padding
+      ];
+      const finalWidth = adjustedWidth + padding * 2;
+      const finalHeight = adjustedHeight + padding * 2;
 
       // 清除之前的标注
       overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-
-      // 保存当前状态
-      overlayCtx.save();
-      
-      // 应用镜像变换
-      overlayCtx.scale(-1, 1);
-      overlayCtx.translate(-overlayCanvas.width, 0);
 
       if (studentName) {
         // 绘制红色识别框
@@ -162,7 +183,7 @@ function App() {
         overlayCtx.lineWidth = 3;
         overlayCtx.shadowColor = "rgba(255, 0, 0, 0.4)";
         overlayCtx.shadowBlur = 8;
-        overlayCtx.strokeRect(topLeft[0], topLeft[1], width, height);
+        overlayCtx.strokeRect(finalTopLeft[0], finalTopLeft[1], finalWidth, finalHeight);
         overlayCtx.shadowBlur = 0;
         
         // 绘制名字和置信度
@@ -170,8 +191,8 @@ function App() {
         overlayCtx.font = "bold 16px Arial";
         const labelWidth = overlayCtx.measureText(labelText).width + 20;
         const labelHeight = 28;
-        const labelX = topLeft[0] + (width - labelWidth) / 2;
-        const labelY = topLeft[1] + height + 5;
+        const labelX = finalTopLeft[0] + (finalWidth - labelWidth) / 2;
+        const labelY = finalTopLeft[1] + finalHeight + 5;
         
         overlayCtx.fillStyle = "rgba(255, 0, 0, 0.9)";
         overlayCtx.beginPath();
@@ -186,14 +207,14 @@ function App() {
         // 绘制蓝色未识别框
         overlayCtx.strokeStyle = "#0000FF";
         overlayCtx.lineWidth = 2;
-        overlayCtx.strokeRect(topLeft[0], topLeft[1], width, height);
+        overlayCtx.strokeRect(finalTopLeft[0], finalTopLeft[1], finalWidth, finalHeight);
         
         const labelText = "未识别";
         overlayCtx.font = "bold 16px Arial";
         const labelWidth = overlayCtx.measureText(labelText).width + 20;
         const labelHeight = 28;
-        const labelX = topLeft[0] + (width - labelWidth) / 2;
-        const labelY = topLeft[1] + height + 5;
+        const labelX = finalTopLeft[0] + (finalWidth - labelWidth) / 2;
+        const labelY = finalTopLeft[1] + finalHeight + 5;
         
         overlayCtx.fillStyle = "rgba(0, 0, 255, 0.9)";
         overlayCtx.beginPath();
@@ -205,16 +226,13 @@ function App() {
         overlayCtx.textBaseline = "middle";
         overlayCtx.fillText(labelText, labelX + labelWidth/2, labelY + labelHeight/2);
       }
-
-      // 恢复之前的状态
-      overlayCtx.restore();
     };
 
     const detectFaces = async () => {
       if (isDetecting || !model || !overlayCtx || !video.videoWidth || !video.videoHeight) return;
       
       const now = Date.now();
-      if (now - lastDetectionTime < 300) return;
+      if (now - lastDetectionTime < 100) return;
       
       setIsDetecting(true);
       lastDetectionTime = now;
@@ -239,12 +257,14 @@ function App() {
             
             for (const student of studentDescriptors) {
               const distance = calculateDistance(currentDescriptor, student.descriptor);
+              console.log(`与 ${student.name} 的距离:`, distance);
               if (distance < bestMatch.distance) {
                 bestMatch = { name: student.name, distance };
               }
             }
 
-            const confidenceScore = Math.max(0, Math.min(100, 100 - (bestMatch.distance * 100)));
+            // 调整置信度计算方式
+            const confidenceScore = Math.max(0, Math.min(100, 100 - (bestMatch.distance * 0.5)));
             console.log('最佳匹配:', bestMatch.name, '距离:', bestMatch.distance, '置信度:', confidenceScore);
             
             if (bestMatch.name !== lastDetectedStudent || confidenceScore !== lastConfidence) {
@@ -329,7 +349,6 @@ function App() {
             left: 0,
             width: "640px",
             height: "480px",
-            transform: "scaleX(-1)",
             zIndex: 2
           }}
         />
